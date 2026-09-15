@@ -1,0 +1,172 @@
+#!/bin/bash
+#
+# fog-set-hostname -- setzt den Hostnamen anhand der MAC-Adresse.
+#
+# Hintergrund: FOG-Images sind 1:1-Klone des Mutter-PCs, d.h. /etc/hostname
+# enthaelt nach dem Deploy auf jedem Rechner den Namen des Mutter-PCs.
+# Dieses Skript laeuft bei jedem Boot (systemd oneshot, vor NetworkManager
+# und vor dem Display-Manager) und korrigiert den Namen anhand einer festen
+# MAC -> Hostname Tabelle.
+#
+# Tabelle:  /etc/fog-hostnames.map   ("<mac> <hostname>" pro Zeile)
+# Log:      /var/log/fog-set-hostname.log
+#
+set -u
+
+# Optionales Praefix, um das Skript gegen ein gemountetes System zu testen
+# bzw. es aus einem Rescue-System heraus zu benutzen:  FOG_SYSROOT=/mnt ...
+R="${FOG_SYSROOT:-}"
+
+MAPFILE="${FOG_HOSTNAME_MAP:-$R/etc/fog-hostnames.map}"
+LOGFILE="${FOG_HOSTNAME_LOG:-$R/var/log/fog-set-hostname.log}"
+# Name, falls die MAC nicht in der Tabelle steht. %s wird durch die letzten
+# drei MAC-Oktette ersetzt. Absichtlich auffaellig, damit man es merkt.
+FALLBACK_FMT="${FOG_HOSTNAME_FALLBACK:-cse-g530-unreg-%s}"
+
+log() {
+    local msg
+    msg="$(date '+%Y-%m-%d %H:%M:%S') $*"
+    printf '%s\n' "$msg" >&2
+    printf '%s\n' "$msg" >>"$LOGFILE" 2>/dev/null || true
+}
+
+die() { log "FEHLER: $*"; exit 1; }
+
+# --- 1. Physische Netzwerkkarten und deren MACs einsammeln -----------------
+# Nur Interfaces mit /sys/class/net/<if>/device sind echte Hardware; damit
+# fallen lo, docker0, virbr0, veth*, bridges usw. automatisch raus.
+collect_macs() {
+    local dev name mac
+    # Testhilfe: FOG_FAKE_MACS="aa:bb:.. cc:dd:.." umgeht /sys
+    if [ -n "${FOG_FAKE_MACS:-}" ]; then
+        local i=0
+        for mac in $FOG_FAKE_MACS; do
+            printf '%s test%d\n' "${mac,,}" "$i"; i=$((i+1))
+        done
+        return 0
+    fi
+    for dev in /sys/class/net/*; do
+        [ -e "$dev/device" ] || continue
+        name="${dev##*/}"
+        [ -r "$dev/address" ] || continue
+        read -r mac <"$dev/address" || continue
+        [ -n "$mac" ] || continue
+        [ "$mac" = "00:00:00:00:00:00" ] && continue
+        printf '%s %s\n' "${mac,,}" "$name"
+    done
+}
+
+# --- 2. MAC in der Tabelle nachschlagen ------------------------------------
+normalize_mac() {
+    local m="${1,,}"
+    m="${m//-/:}"          # 00-11-22-... -> 00:11:22:...
+    m="${m//./:}"          # 0011.2233.4455 wird zumindest teilweise normiert
+    printf '%s\n' "$m"
+}
+
+lookup_hostname() {
+    local want="$1" f1 f2 rest
+    while read -r f1 f2 rest || [ -n "$f1" ]; do
+        case "$f1" in ''|'#'*) continue ;; esac
+        [ -n "${f2:-}" ] || continue
+        [ "$(normalize_mac "$f1")" = "$want" ] || continue
+        printf '%s\n' "$f2"
+        return 0
+    done <"$MAPFILE"
+    return 1
+}
+
+# --- 3. Hostnamen setzen ----------------------------------------------------
+apply_hostname() {
+    local new="$1" old
+    old="$(cat "$R/etc/hostname" 2>/dev/null | tr -d '[:space:]')"
+
+    if [ "$old" = "$new" ] && { [ -n "$R" ] || [ "$(hostname)" = "$new" ]; }; then
+        log "Hostname bereits korrekt: $new"
+        return 0
+    fi
+
+    # /etc/hostname
+    printf '%s\n' "$new" >"$R/etc/hostname"
+
+    # Kernel-Hostname sofort setzen. Bewusst 'hostname' (util-linux) statt
+    # 'hostnamectl': hostnamectl braucht D-Bus + systemd-hostnamed, die zu
+    # diesem fruehen Zeitpunkt im Boot evtl. noch nicht laufen.
+    if [ -z "$R" ]; then
+        hostname "$new" 2>/dev/null || log "WARN: 'hostname $new' fehlgeschlagen"
+    fi
+
+    # /etc/hosts: Ubuntu traegt den eigenen Namen auf 127.0.1.1 ein.
+    # Ohne diese Zeile wird 'sudo' langsam ("unable to resolve host ...").
+    if grep -qE '^[[:space:]]*127\.0\.1\.1[[:space:]]' "$R/etc/hosts" 2>/dev/null; then
+        sed -ri "s/^([[:space:]]*127\.0\.1\.1[[:space:]]+).*/\1$new/" "$R/etc/hosts"
+    else
+        printf '127.0.1.1\t%s\n' "$new" >>"$R/etc/hosts"
+    fi
+
+    # Falls der Mutter-PC einen "Pretty Hostname" gesetzt hatte, zeigt GNOME
+    # (Einstellungen -> Info) diesen an, nicht /etc/hostname.
+    if [ -f "$R/etc/machine-info" ] && grep -q '^PRETTY_HOSTNAME=' "$R/etc/machine-info"; then
+        sed -ri '/^PRETTY_HOSTNAME=/d' "$R/etc/machine-info"
+        log "PRETTY_HOSTNAME aus /etc/machine-info entfernt"
+    fi
+
+    log "Hostname geaendert: '${old:-<leer>}' -> '$new'"
+}
+
+# --- 4. Geklonte Identitaeten reparieren -----------------------------------
+# SSH-Host-Keys: im Image geloescht (siehe pre-capture-cleanup), hier neu
+# erzeugen, damit nicht alle Rechner denselben Fingerprint haben.
+fix_ssh_host_keys() {
+    command -v ssh-keygen >/dev/null 2>&1 || return 0
+    [ -d "$R/etc/ssh" ] || return 0
+    if ! ls "$R"/etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
+        log "Keine SSH-Host-Keys vorhanden -> werden neu erzeugt"
+        ssh-keygen -A ${R:+-f "$R"} >/dev/null 2>&1 && log "SSH-Host-Keys neu erzeugt"
+    fi
+}
+
+# Sysprep-Marker: pre-capture-cleanup legt /etc/fog-image-sysprepped an.
+# Der erste Boot jedes Rechners konsumiert (loescht) den Marker. Fehlt er,
+# wurde das Image ohne Cleanup hochgeladen -> machine-id, SSH-Host-Keys usw.
+# sind auf allen Rechnern identisch (kaputte DHCP-Reservierungen!).
+check_sysprep_marker() {
+    if [ -f "$R/etc/fog-image-sysprepped" ]; then
+        log "Sysprep-Marker gefunden ($(cat "$R/etc/fog-image-sysprepped" 2>/dev/null)) -> wird konsumiert"
+        rm -f "$R/etc/fog-image-sysprepped"
+        return 0
+    fi
+    log "WARN: kein Sysprep-Marker -> Image wurde vermutlich ohne"
+    log "WARN: pre-capture-cleanup.sh erstellt. machine-id/SSH-Keys pruefen!"
+}
+
+# --- main -------------------------------------------------------------------
+[ "$(id -u)" -eq 0 ] || [ -n "$R" ] || die "muss als root laufen"
+[ -r "$MAPFILE" ] || die "Tabelle $MAPFILE nicht lesbar"
+
+target=""
+matched_mac=""
+first_mac=""
+
+while read -r mac ifname; do
+    mac="$(normalize_mac "$mac")"
+    [ -n "$first_mac" ] || first_mac="$mac"
+    if name="$(lookup_hostname "$mac")"; then
+        target="$name"; matched_mac="$mac"
+        log "Treffer: $ifname ($mac) -> $name"
+        break
+    fi
+    log "Keine Zuordnung fuer $ifname ($mac)"
+done < <(collect_macs)
+
+if [ -z "$target" ]; then
+    suffix="$(printf '%s' "${first_mac:-000000}" | tr -d ':-' | tail -c 6)"
+    # shellcheck disable=SC2059
+    target="$(printf "$FALLBACK_FMT" "$suffix")"
+    log "WARN: keine MAC aus $MAPFILE gefunden -> Fallback-Name '$target'"
+fi
+
+apply_hostname "$target"
+fix_ssh_host_keys
+check_sysprep_marker
+exit 0

@@ -1,0 +1,19 @@
+[Unit]
+Description=Hostnamen anhand der MAC-Adresse setzen (FOG-Deployment)
+Documentation=file:/etc/fog-hostnames.map
+ConditionPathExists=/etc/fog-hostnames.map
+After=local-fs.target
+# Muss laufen, bevor irgendetwas den (falschen) Hostnamen liest oder per
+# DHCP verschickt, und bevor die grafische Anmeldung startet.
+Wants=network-pre.target
+Before=network-pre.target network.target NetworkManager.service systemd-networkd.service systemd-logind.service display-manager.service ssh.service avahi-daemon.service cups.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/fog-set-hostname
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

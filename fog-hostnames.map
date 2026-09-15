@@ -1,0 +1,38 @@
+# MAC -> Hostname Zuordnung, Raum G530 (CSE)
+#
+# Format:  <mac-adresse>  <hostname>   [# Kommentar]
+# - Gross/Kleinschreibung und '-' statt ':' egal (aa-bb-cc == AA:BB:CC)
+# - Zeilen mit '#' sind Kommentare
+# - Es zaehlt die MAC der ersten physischen NIC, die hier gefunden wird
+#
+# Stand: 2026-09-10
+# Nach Aenderungen: Datei auf dem Mutter-PC pflegen, dann neu capturen.
+
+# --- Mutter-PC (anderer Raum) ----------------------------------------------
+# Traegt hier seine eigene MAC ein, sonst heisst er nach dem naechsten Boot
+# 'cse-g530-unreg-xxxxxx'. MAC ermitteln mit:  ip -o link show
+#6c:3c:8c:00:00:00   cse-g530-00                 # 10.1.132.xx  MUTTER-PC
+
+# --- Raum G530 --------------------------------------------------------------
+6c:3c:8c:3c:f9:23   cse-g530-01l                # 10.1.132.64
+6c:3c:8c:3c:f9:44   cse-g530-02l                # 10.1.132.65
+6c:3c:8c:3c:fa:5b   cse-g530-03l                # 10.1.132.66
+6c:3c:8c:39:47:88   cse-g530-04l                # 10.1.132.67
+6c:3c:8c:39:48:5e   cse-g530-05l                # 10.1.132.68
+6c:3c:8c:3c:f7:18   cse-g530-06l                # 10.1.132.69
+6c:3c:8c:3c:fb:0d   cse-g530-07l                # 10.1.132.70
+6c:3c:8c:3c:f9:26   cse-g530-08l                # 10.1.132.71
+6c:3c:8c:3c:f8:cf   cse-g530-09l                # 10.1.132.72
+6c:3c:8c:39:45:11   cse-g530-10l                # 10.1.132.73
+6c:3c:8c:39:48:68   cse-g530-11l                # 10.1.132.74
+6c:3c:8c:39:45:68   cse-g530-12l                # 10.1.132.75
+6c:3c:8c:3a:9d:a4   cse-g530-13l                # 10.1.132.76
+6c:3c:8c:39:41:9f   cse-g530-14l                # 10.1.132.77
+6c:3c:8c:3c:62:c3   cse-g530-15l                # 10.1.132.78
+6c:3c:8c:3c:f6:40   cse-g530-16l                # 10.1.132.79
+6c:3c:8c:3b:f4:6c   cse-g530-17l                # 10.1.132.80
+6c:3c:8c:39:45:22   cse-g530-18l                # 10.1.132.81
+6c:3c:8c:39:48:5b   cse-g530-19l                # 10.1.132.82
+6c:3c:8c:39:44:a0   cse-g530-20l                # 10.1.132.83
+6c:3c:8c:39:43:84   cse-g530-21l                # 10.1.132.84
+6c:3c:8c:3c:f8:68   cse-g530-22l                # 10.1.132.85
